@@ -13,6 +13,10 @@ public class GameManager : MonoBehaviour
     // シングルトンインスタンス
     public static GameManager instance;
 
+    [Header("User Identification")]
+    [Tooltip("StartSceneで入力され、FlagManager経由で引き継がれたユーザーID")]
+    public string userId = ""; // ユーザーIDを保持する変数
+
     // --- シーン間で保持するゲーム状態 ---
     public Vector3 playerPosition; // プレイヤーの座標
     public Quaternion playerRotation; // プレイヤーの向き
@@ -76,6 +80,26 @@ public class GameManager : MonoBehaviour
         {
             // 既にインスタンスが存在する場合は、このオブジェクトを破棄する
             Destroy(gameObject);
+        }
+    }
+
+    void Start()
+    {
+        // --- [ここから追加] ---
+        // FlagManagerからIDを引き継ぐ
+        // (userIdがまだ設定されていない場合のみ実行)
+        if (string.IsNullOrEmpty(userId))
+        {
+            if (FlagManager.instance != null && FlagManager.instance.HasStoredUserId())
+            {
+                userId = FlagManager.instance.GetStoredUserId();
+                Debug.Log($"[GameManager] FlagManagerからID '{userId}' を引き継ぎました。");
+            }
+            else
+            {
+                Debug.LogWarning("[GameManager] FlagManager または StoredUserId が見つかりません。");
+                // (注: デバッグ実行などでMainSceneから直接起動した場合、こうなります)
+            }
         }
     }
 

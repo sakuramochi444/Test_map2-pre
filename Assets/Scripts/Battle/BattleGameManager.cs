@@ -44,14 +44,6 @@ public class BattleGameManager : MonoBehaviour
     [Tooltip("Python (cap.py) 側で設定したポートと合わせる")]
     public int udpListenPort = 12345;
 
-    [Header("シリアルポート設定 (マイコン用)")]
-    [Tooltip("マイコンが接続されているCOMポート名 (例: COM256)")]
-    public string portName = "COM256";
-    [Tooltip("ボーレート (マイコン側の Serial.begin() と合わせる)")]
-    public int baudRate = 115200;
-    // -------------------------------------------------
-
-
     // ... (currentEnemies ～ gameOverSceneName は変更なし) ...
     private CharacterStats[] currentEnemies = new CharacterStats[4];
     private float[] enemyActionCounters;
@@ -73,12 +65,6 @@ public class BattleGameManager : MonoBehaviour
     private Thread udpReceiveThread;
     private bool isUdpThreadRunning = false;
     private ConcurrentQueue<string> udpReceivedDataQueue = new ConcurrentQueue<string>();
-
-    // シリアル受信関連
-    private SerialPort serialPort;
-    private Thread serialReadThread;
-    private bool isSerialThreadRunning = false;
-    private ConcurrentQueue<string> serialReceivedDataQueue = new ConcurrentQueue<string>();
 
     // 受信したキー入力状態を保持する変数 (このフレームで押されたか)
     private bool isW_Pressed = false;
@@ -134,22 +120,18 @@ public class BattleGameManager : MonoBehaviour
 
         // --- [変更] UDPリスナーとシリアルポートの両方を開始 ---
         StartUDPListener();
-        OpenSerialPort();
-        // ---------------------------------
     }
 
     // [変更] 両方のリスナーを停止
     void OnApplicationQuit()
     {
         StopUDPListener();
-        CloseSerialPort();
     }
 
     // [変更] 両方のリスナーを停止
     void OnDestroy()
     {
         StopUDPListener();
-        CloseSerialPort();
     }
 
 
@@ -209,75 +191,62 @@ public class BattleGameManager : MonoBehaviour
         isS_Pressed = false;
         isD_Pressed = false;
         isSpace_Pressed = false;
-        isJ_Pressed = false; // [追加]
-        isK_Pressed = false; // [追加]
-        isL_Pressed = false; // [追加]
+        isJ_Pressed = false;
+        isK_Pressed = false;
+        isL_Pressed = false;
 
-        // --- 2. UDP入力処理 (Python) ---
-        string latestDirectionData = null;
+        // --- 2. UDP入力処理 (Python) (新データ形式対応) ---
+        string latestDirection = "NONE"; // 向きの判定用に、最新の「向き」データを保持
         bool spaceFoundInQueue = false;
-        // [ここから追加]
         bool jFoundInQueue = false;
         bool kFoundInQueue = false;
         bool lFoundInQueue = false;
-        // [ここまで追加]
 
+        // 2a. キューに溜まっているデータをすべて処理
         while (udpReceivedDataQueue.TryDequeue(out string data))
         {
-            latestDirectionData = data;
             string[] parts = data.Split(',');
-            if (parts.Length >= 2)
+            if (parts.Length == 0) continue; // 空データは無視
+
+            // 2b. 向きの更新 (常に最新のデータで上書き)
+            latestDirection = parts[0];
+
+            // 2c. アクションのチェック (parts[1]以降)
+            for (int i = 1; i < parts.Length; i++)
             {
-                string action = parts[1]; // e.g., "SPACE", "J", "K", "L", or "NONE"
-                // [ここから変更]
-                if (action == "SPACE") { spaceFoundInQueue = true; }
-                else if (action == "J") { jFoundInQueue = true; }
-                else if (action == "K") { kFoundInQueue = true; }
-                else if (action == "L") { lFoundInQueue = true; }
-                // [ここまで変更]
+                // キューの中の *どれか1つでも* アクションを含んでいたらフラグを立てる
+                if (parts[i] == "SPACE") { spaceFoundInQueue = true; }
+                else if (parts[i] == "J") { jFoundInQueue = true; }
+                else if (parts[i] == "K") { kFoundInQueue = true; }
+                else if (parts[i] == "L") { lFoundInQueue = true; }
             }
         }
 
-        // 向きの判定
-        if (latestDirectionData != null)
-        {
-            string[] parts = latestDirectionData.Split(',');
-            if (parts.Length >= 1)
-            {
-                string direction = parts[0];
-                if (direction == "W") isW_Pressed = true;
-                else if (direction == "A") isA_Pressed = true;
-                else if (direction == "S") isS_Pressed = true;
-                else if (direction == "D") isD_Pressed = true;
-            }
-        }
+        // 2d. 向きの判定 (最新のデータに基づいて行う)
+        if (latestDirection == "W") isW_Pressed = true;
+        else if (latestDirection == "A") isA_Pressed = true;
+        else if (latestDirection == "S") isS_Pressed = true;
+        else if (latestDirection == "D") isD_Pressed = true;
 
-        // アクションの判定
+        // 2e. アクションの判定 (このフレームで1回でも受信していたら True にする)
         if (spaceFoundInQueue) { isSpace_Pressed = true; }
-        if (jFoundInQueue) { isJ_Pressed = true; } // [追加]
-        if (kFoundInQueue) { isK_Pressed = true; } // [追加]
-        if (lFoundInQueue) { isL_Pressed = true; } // [追加]
+        if (jFoundInQueue) { isJ_Pressed = true; }
+        if (kFoundInQueue) { isK_Pressed = true; }
+        if (lFoundInQueue) { isL_Pressed = true; }
 
-        // --- 3. シリアル入力処理 (マイコン) ---
-        while (serialReceivedDataQueue.TryDequeue(out string serialData))
-        {
-            string trimmedData = serialData.Trim();
-            if (trimmedData == "s") { isSpace_Pressed = true; Debug.Log("マイコンから 's' を受信"); }
-            else if (trimmedData == "W") { isW_Pressed = true; Debug.Log("マイコンから 'W' を受信"); }
-            else if (trimmedData == "S") { isS_Pressed = true; Debug.Log("マイコンから 'S' を受信"); }
-            else if (trimmedData == "A") { isA_Pressed = true; Debug.Log("マイコンから 'A' を受信"); }
-            else if (trimmedData == "D") { isD_Pressed = true; Debug.Log("マイコンから 'D' を受信"); }
-            // (注: マイコンからの JKL には現在対応していません)
-            else if (!string.IsNullOrEmpty(trimmedData)) { Debug.Log("シリアル受信 (無視): " + trimmedData); }
-        }
+
+        // --- 3. [削除] シリアル入力処理 ---
+
 
         bool playerActed = false;
         bool isRoto = (GameManager.instance != null) ? GameManager.instance.isRotoActive : true;
-        bool rotoAttackInput = (isRoto && isSpace_Pressed); // Serial "s" or UDP "SPACE"
+
+        // [変更] シリアル("s")の判定を削除
+        bool rotoAttackInput = (isRoto && isSpace_Pressed); // UDP "SPACE"
 
         // --- 4. 入力ロジックの実行 ---
 
-        // 1a. 武器の「向き」変更 (キーボード OR UDP OR シリアル)
+        // 1a. 武器の「向き」変更 (キーボード OR UDP)
         if (isW_Pressed || Input.GetKeyDown(KeyCode.W)) { SetActiveWeaponDisplay(3, true); }
         else if (isS_Pressed || Input.GetKeyDown(KeyCode.S)) { SetActiveWeaponDisplay(2, true); }
         else if (isA_Pressed || Input.GetKeyDown(KeyCode.A)) { SetActiveWeaponDisplay(0, true); }
@@ -294,13 +263,13 @@ public class BattleGameManager : MonoBehaviour
             }
         }
 
-        // --- [ここから変更] JKLの入力判定を統合 ---
+        // --- [変更なし] JKLの入力判定を統合 ---
         bool k_Input = Input.GetKeyDown(KeyCode.K) || isK_Pressed;
         bool j_Input = Input.GetKeyDown(KeyCode.J) || isJ_Pressed;
         bool l_Input = Input.GetKeyDown(KeyCode.L) || isL_Pressed;
-        // --- [変更ここまで] ---
 
         // 1c. 「攻撃」 (J, K, Lキー、または Roto時の入力)
+        // (ロジックは変更なし)
         if (!Input.GetKeyDown(KeyCode.C) && (k_Input || j_Input || l_Input || rotoAttackInput))
         {
             if (playerStats == null) { return; }
@@ -308,12 +277,10 @@ public class BattleGameManager : MonoBehaviour
             int activeRotoIndex = (GameManager.instance != null) ? GameManager.instance.currentWeaponDirectionIndex : 0;
             if (activeRotoIndex < 0 || activeRotoIndex >= 4) { return; }
 
-            // [変更] j_Input を使用
             if (!isRoto && j_Input)
             {
                 playerActed = HandleRodJKey(activeRotoIndex);
             }
-            // [変更] l_Input を使用
             else if (!isRoto && l_Input)
             {
                 playerActed = HandleRodLKey(activeRotoIndex);
@@ -331,7 +298,6 @@ public class BattleGameManager : MonoBehaviour
                     {
                         if (isRoto)
                         {
-                            // [変更] k_Input を使用
                             if (k_Input || rotoAttackInput)
                             {
                                 playerActed = PerformAttack(targetEnemy, true, 1, activeRotoIndex);
@@ -340,7 +306,6 @@ public class BattleGameManager : MonoBehaviour
                         }
                         else // Rod
                         {
-                            // [変更] k_Input を使用
                             if (k_Input)
                             {
                                 playerActed = PerformAttack(targetEnemy, false, 1, activeRotoIndex);
@@ -616,53 +581,5 @@ public class BattleGameManager : MonoBehaviour
             catch (System.Exception e) { if (isUdpThreadRunning) { Debug.LogError("UDPデータ受信エラー: " + e.Message); } }
         }
         Debug.Log("UDP受信スレッドを終了します。");
-    }
-
-    // --- シリアル通信メソッド群 ---
-
-    private void OpenSerialPort()
-    {
-        serialPort = new SerialPort(portName, baudRate);
-        serialPort.ReadTimeout = 1000;
-
-        try
-        {
-            serialPort.Open();
-            isSerialThreadRunning = true;
-            serialReadThread = new Thread(ReadSerialData);
-            serialReadThread.IsBackground = true;
-            serialReadThread.Start();
-            Debug.Log("シリアルポートを開きました: " + portName);
-        }
-        catch (System.Exception e) { Debug.LogError("シリアルポートを開けませんでした: " + e.Message); }
-    }
-
-    private void CloseSerialPort()
-    {
-        isSerialThreadRunning = false;
-        if (serialReadThread != null && serialReadThread.IsAlive) { serialReadThread.Join(); }
-        serialReadThread = null;
-        if (serialPort != null && serialPort.IsOpen)
-        {
-            serialPort.Close();
-            serialPort.Dispose();
-            serialPort = null;
-            Debug.Log("シリアルポートを閉じました。");
-        }
-    }
-
-    private void ReadSerialData()
-    {
-        while (isSerialThreadRunning && serialPort != null && serialPort.IsOpen)
-        {
-            try
-            {
-                string data = serialPort.ReadLine();
-                serialReceivedDataQueue.Enqueue(data);
-            }
-            catch (System.TimeoutException) { /* タイムアウトは無視 */ }
-            catch (System.Exception e) { if (isSerialThreadRunning) { Debug.LogError("シリアルデータ読み取りエラー: " + e.Message); } }
-        }
-        Debug.Log("シリアル読み取りスレッドを終了します。");
     }
 }

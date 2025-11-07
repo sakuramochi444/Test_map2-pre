@@ -206,7 +206,7 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        // --- UDP受信データの処理 ---
+        // --- [ここから修正] UDP受信データの処理 (新データ形式対応) ---
 
         // 1. このフレームのキー状態をリセット
         isW_Pressed = false;
@@ -215,40 +215,38 @@ public class PlayerController : MonoBehaviour
         isD_Pressed = false;
         isSpace_Pressed = false; // 毎フレームリセット
 
-        string latestDirectionData = null; // 向きの判定用に、最新のメッセージを保持
+        string latestDirection = "NONE"; // 向きの判定用に、最新の「向き」データを保持
         bool spaceFoundInQueue = false;    // このフレームでSPACEを1回でも受信したか
 
         // 2. キューに溜まっているデータをすべて処理
         while (receivedDataQueue.TryDequeue(out string data))
         {
-            latestDirectionData = data; // 向きは常に最新のデータで上書き
-
             string[] parts = data.Split(',');
-            if (parts.Length >= 2)
-            {
-                string action = parts[1];
+            if (parts.Length == 0) continue; // 空データは無視
 
+            // 2a. 向きの更新 (常に最新のデータで上書き)
+            //     (parts[0] が "NONE" の場合も上書きされます)
+            latestDirection = parts[0];
+
+            // 2b. アクションのチェック (parts[1]以降)
+            for (int i = 1; i < parts.Length; i++)
+            {
                 // キューの中の *どれか1つでも* "SPACE" を含んでいたらフラグを立てる
-                if (action == "SPACE")
+                if (parts[i] == "SPACE")
                 {
                     spaceFoundInQueue = true;
                 }
+                // (J, K, L など、このスクリプトに関係ないアクションは無視)
             }
         }
 
         // 3. 向きの判定 (最新のデータに基づいて行う)
-        if (latestDirectionData != null)
-        {
-            string[] parts = latestDirectionData.Split(',');
-            if (parts.Length >= 1) // 向きデータ (parts[0]) があるか
-            {
-                string direction = parts[0];
-                if (direction == "W") isW_Pressed = true;
-                else if (direction == "A") isA_Pressed = true;
-                else if (direction == "S") isS_Pressed = true;
-                else if (direction == "D") isD_Pressed = true;
-            }
-        }
+        if (latestDirection == "W") isW_Pressed = true;
+        else if (latestDirection == "A") isA_Pressed = true;
+        else if (latestDirection == "S") isS_Pressed = true;
+        else if (latestDirection == "D") isD_Pressed = true;
+        // (latestDirection == "NONE" の場合はフラグは立たない)
+
 
         // 4. 歩行の判定 (このフレームで1回でも受信していたら True にする)
         if (spaceFoundInQueue)
@@ -262,10 +260,9 @@ public class PlayerController : MonoBehaviour
         bool keyPressed = false; // 「移動」キー（SPACE）が押されたか
 
 
-        // --- [ここからロジック修正] ---
+        // --- [ここからロジック修正] (変更なし) ---
 
         // 1. 武器の「向き」変更 (WASDキー または UDP)
-        // (これは if/else if のままで良い。複数の向きを同時に押せないため)
         if (isW_Pressed || Input.GetKeyDown(KeyCode.W))
         {
             SetActiveWeaponDisplay(3, true);
@@ -282,25 +279,19 @@ public class PlayerController : MonoBehaviour
         {
             SetActiveWeaponDisplay(1, true);
         }
-        // [注意] Cキー（武器切り替え）は、向き変更とも移動とも排他（else if）にする
+
         if (Input.GetKeyDown(KeyCode.C))
         {
             ToggleWeaponType();
-            // Cキーはターン消費しない
             keyPressed = false;
         }
 
         // 2. 「移動」 (SPACEキー または UDP)
-        // [★修正★] 向き変更の if ブロックとは *独立* させる。
-        // (ただし、Cキーが押された場合は移動しないようにする)
         if (!Input.GetKeyDown(KeyCode.C) && (isSpace_Pressed || Input.GetKeyDown(KeyCode.Space)))
         {
             if (GameManager.instance != null)
             {
-                // GameManagerから現在の向きを取得
                 int directionIndex = GameManager.instance.currentWeaponDirectionIndex;
-
-                // 向きインデックス(0=A, 1=D, 2=S, 3=W)に応じて移動方向を決定
                 switch (directionIndex)
                 {
                     case 0: // A (Z+)
@@ -316,31 +307,22 @@ public class PlayerController : MonoBehaviour
                         moveDirection.x = 1;
                         break;
                 }
-
-                // 移動キーが押された（＝ターン消費）
                 keyPressed = true;
             }
         }
-
         // --- [ロジック修正 ここまで] ---
 
 
-        // ターン制処理の基点となる、プレイヤーの「移動前の位置」を記録
+        // (中略: ターン制処理、TryMove、UpdateExploration など、以降のメソッドは変更なし)
+        // ...
         Vector3 playerPosBeforeMove = transform.position;
-
-        // 3. プレイヤーの移動処理（TryMove）を実行 (SPACEが押された場合のみ)
         if (moveDirection != Vector3.zero)
         {
             TryMove(moveDirection);
         }
-
-        // 4. 移動キー（SPACE）が押されていた場合のみ、敵のターンを実行
         if (keyPressed)
         {
-            // シーン上のすべての "EnemyController" を検索
             EnemyController[] allEnemies = FindObjectsByType<EnemyController>(FindObjectsSortMode.None);
-
-            // 各敵の ExecuteTurn を呼び出し、プレイヤーの移動前位置を渡す
             foreach (EnemyController enemy in allEnemies)
             {
                 enemy.ExecuteTurn(playerPosBeforeMove);

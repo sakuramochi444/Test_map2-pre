@@ -1,4 +1,4 @@
-// FlagManager.cs (修正後)
+// FlagManager.cs (修正・完全版)
 
 using UnityEngine;
 using UnityEngine.Networking; // UnityWebRequest を使うために必要
@@ -7,23 +7,20 @@ using System.Text;
 
 public class FlagManager : MonoBehaviour
 {
-    // --- [追加] シングルトンインスタンス ---
     public static FlagManager instance;
 
-    // --- データ構造定義 ---
+    // StartSceneで設定され、GameManagerに引き継がれるまで一時的にIDを保持する
+    private string storedUserId = "";
 
-    // (中略: EnvData, FlagUpdateRequest, UpdateData クラス定義)
-    // 1. env.json をデシリアライズするためのクラス
-    // 注意: UnityのJsonUtilityは "x-api-key" のようなハイフンを認識できません。
-    // そのため、JSONテキストを取得後に "x-api-key" を "x_api_key" に置換してパースします。
+    // --- [ここから追加] APIリクエスト用のデータ構造定義 ---
+
     [System.Serializable]
     private class EnvData
     {
         public string uri;
-        public string x_api_key; // "x-api-key" を置換した "x_api_key" に対応
+        public string x_api_key; // JSONの "x-api-key" と一致させる
     }
 
-    // 2. APIリクエスト（ボディ）のためのクラス
     [System.Serializable]
     private class FlagUpdateRequest
     {
@@ -37,77 +34,102 @@ public class FlagManager : MonoBehaviour
         public string flagName;
         public int increment;
     }
-    // (中略ここまで)
+
+    // --- [追加ここまで] ---
 
 
-    // --- 定数 ---
-    // chFlag.js と getCoin.js から参照
     private const string EnvJsonUri = "https://pinattutaro.github.io/fest2025api/4u/env.json";
-    private const string UserId = "gmk7F5";
 
-    // --- [追加] シングルトンの初期化 ---
     void Awake()
     {
-        // シングルトンパターンの実装
         if (instance == null)
         {
             instance = this;
-            // シーンをまたいでも破棄されないようにする
-            // (GameManagerなど、他のDontDestroyOnLoadオブジェクトと共存させる)
             DontDestroyOnLoad(gameObject);
         }
         else
         {
-            // 既にインスタンスが存在する場合は、このオブジェクトを破棄する
             Destroy(gameObject);
         }
     }
 
-
-    // --- メインの関数 ---
-
+    // --- [ここから追加] ID管理メソッド (変更なし) ---
     /// <summary>
-    /// 敵の討伐総数を送信します (ButtonManagerからリセット時に呼び出されます)。
+    /// StartSceneから呼び出され、ユーザーIDを一時的に保存します。
     /// </summary>
-    /// <param name="amount">送信する総討伐数</param>
-    public void NotifyEnemyDefeated(int amount)
+    public void SetUserId(string id)
     {
-        // 倒した数が 0 以下なら何もしない
-        if (amount <= 0)
+        if (string.IsNullOrEmpty(id))
         {
-            Debug.Log($"[FlagManager] 討伐数 {amount} のため、API送信はスキップします。");
+            Debug.LogWarning("[FlagManager] 空のIDが設定されようとしました。");
             return;
         }
-
-        // コルーチンを開始してフラグを更新 (引数の amount を使用)
-        Debug.Log($"[FlagManager] 討伐総数 {amount} でAPI送信を開始します。");
-        StartCoroutine(UpdateFlagCoroutine("dungeon_enemies_defeated", amount));
+        storedUserId = id;
+        Debug.Log($"[FlagManager] ユーザーID '{storedUserId}' を一時保存しました。");
     }
 
     /// <summary>
-    /// [追加] 階層を突破した時に呼び出します。
+    /// GameManagerにIDを引き渡すために使用します。
+    /// </summary>
+    public string GetStoredUserId()
+    {
+        return storedUserId;
+    }
+
+    /// <summary>
+    /// IDが設定されているか確認します（主にGameManagerが使用）
+    /// </summary>
+    public bool HasStoredUserId()
+    {
+        return !string.IsNullOrEmpty(storedUserId);
+    }
+    // --- [追加ここまで] ---
+
+
+    // --- [ここから追加] 他のスクリプトから呼び出されるメソッド群 ---
+
+    /// <summary>
+    /// [ButtonManager用] 敵の総討伐数をAPIに送信します。
+    /// </summary>
+    public void NotifyEnemyDefeated(int killCount)
+    {
+        if (killCount <= 0)
+        {
+            Debug.Log("[FlagManager] 討伐数が0のため、API送信をスキップします。");
+            return;
+        }
+
+        // "enemies_defeated" フラグを killCount の値だけ増やす
+        StartCoroutine(UpdateFlagCoroutine("dungeon_enemies_defeated", killCount));
+        Debug.Log($"[FlagManager] API送信開始: dungeon_enemies_defeated (+{killCount})");
+    }
+
+    /// <summary>
+    /// [PlayerController用] 階層クリアをAPIに送信します。
     /// </summary>
     public void NotifyFloorCleared()
     {
         // "dungeon_floors_cleared" フラグを 1 増やす
         StartCoroutine(UpdateFlagCoroutine("dungeon_floors_cleared", 1));
+        Debug.Log("[FlagManager] API送信開始: dungeon_floors_cleared (+1)");
     }
 
     /// <summary>
-    /// [追加] ダンジョンプレイ回数を更新します (例: ゲーム開始時)
+    /// [SceneLoader / ButtonManager用] ダンジョンプレイ回数をAPIに送信します。
     /// </summary>
     public void NotifyDungeonPlayed()
     {
         // "dungeon_played" フラグを 1 増やす
         StartCoroutine(UpdateFlagCoroutine("dungeon_played", 1));
+        Debug.Log("[FlagManager] API送信開始: dungeon_played (+1)");
     }
+
+    // --- [追加ここまで] ---
 
 
     /// <summary>
     /// 実際にAPIリクエストを行うコルーチン
     /// </summary>
-    /// <param name="flagName">更新するフラグ名 (README.md 参照)</param>
-    /// <param name="incrementValue">増やす数</param>
     private IEnumerator UpdateFlagCoroutine(string flagName, int incrementValue)
     {
         // --- ステップ1: env.json から URI と APIキーを取得 ---
@@ -121,12 +143,11 @@ public class FlagManager : MonoBehaviour
             if (envRequest.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogError($"[FlagManager] env.jsonの取得に失敗: {envRequest.error}");
-                yield break; // エラーが発生したら処理を中断
+                yield break;
             }
 
             string jsonText = envRequest.downloadHandler.text;
-
-            // "x-api-key" を "x_api_key" に置換 (JsonUtility のため)
+            // "x-api-key" を "x_api_key" に置換 (C#の変数名と合わせるため)
             string parsableJson = jsonText.Replace("\"x-api-key\":", "\"x_api_key\":");
 
             EnvData envData = JsonUtility.FromJson<EnvData>(parsableJson);
@@ -135,15 +156,36 @@ public class FlagManager : MonoBehaviour
 
             if (string.IsNullOrEmpty(baseUri) || string.IsNullOrEmpty(apiKey))
             {
-                Debug.LogError("[FlagManager] env.jsonのパースに失敗。uriまたはapiKeyが空です。");
+                Debug.LogError("[FlagManager] env.jsonからURIまたはAPIキーを取得できませんでした。");
                 yield break;
             }
         }
 
+
         // --- ステップ2: フラグ更新リクエストのボディを作成 ---
+        string currentUserId = "";
+
+        // 1. まず GameManager (MainScene以降) からIDを取得しようと試みる
+        if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.userId))
+        {
+            currentUserId = GameManager.instance.userId;
+        }
+        // 2. GameManagerにない場合 (例: StartScene -> MainScene 遷移直後のNotifyDungeonPlayed)
+        //    FlagManagerが一時保存しているID (storedUserId) を使用する
+        else if (!string.IsNullOrEmpty(storedUserId))
+        {
+            currentUserId = storedUserId;
+        }
+        else
+        {
+            // どちらにもIDがない場合 (StartSceneで入力されていない場合)
+            Debug.LogError("[FlagManager] ユーザーIDが GameManager にも FlagManager にも設定されていません！ API送信を中止します。");
+            yield break;
+        }
+
         FlagUpdateRequest requestBody = new FlagUpdateRequest
         {
-            userId = UserId,
+            userId = currentUserId, // 取得したIDを使用
             updates = new UpdateData[]
             {
                 new UpdateData
@@ -158,29 +200,24 @@ public class FlagManager : MonoBehaviour
         byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
 
         // --- ステップ3: APIリクエストを作成・送信 (POST) ---
-        string targetUrl = $"{baseUri}/api/users/update-flag"; // chFlag.js から
+        string targetUrl = $"{baseUri}/api/users/update-flag";
 
         using (UnityWebRequest apiRequest = new UnityWebRequest(targetUrl, "POST"))
         {
             apiRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
             apiRequest.downloadHandler = new DownloadHandlerBuffer();
-
-            // ヘッダーを設定 (chFlag.js 参照)
             apiRequest.SetRequestHeader("Content-Type", "application/json");
             apiRequest.SetRequestHeader("x-api-key", apiKey);
 
             yield return apiRequest.SendWebRequest();
 
-            // --- ステップ4: 結果の処理 ---
             if (apiRequest.result != UnityWebRequest.Result.Success)
             {
-                // chFlag.js の console.log(response.status) に相当
                 Debug.LogError($"[FlagManager] フラグ更新APIエラー (Status: {apiRequest.responseCode}): {apiRequest.error}");
                 Debug.LogError($"[FlagManager] エラー詳細: {apiRequest.downloadHandler.text}");
             }
             else
             {
-                // chFlag.js の console.log(data.data) に相当
                 Debug.Log($"[FlagManager] フラグ更新成功 (Status: {apiRequest.responseCode})");
                 Debug.Log($"[FlagManager] レスポンス: {apiRequest.downloadHandler.text}");
             }

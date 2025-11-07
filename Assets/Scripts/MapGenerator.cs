@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+// ★追加：AudioSourceコンポーネントを必須にする
+[RequireComponent(typeof(AudioSource))]
 // マップデータの配列に基づいて、壁、床、敵、宝箱などのオブジェクトをシーン上に生成（インスタンス化）します。
 // また、宝箱の開閉状態を管理し、すべての宝箱が開けられたら特定の壁（openWall）を削除する機能も持ちます。
 public class MapGenerator : MonoBehaviour
@@ -17,6 +19,10 @@ public class MapGenerator : MonoBehaviour
     public GameObject EnemyPrefab; // 敵
     public GameObject openWallPrefab; // 宝箱をすべて開けると開く壁 (タイプ5)
 
+    // ★追加：インスペクタから設定するサウンド
+    [Header("サウンド")]
+    public AudioClip allChestsOpenedSound; // すべての宝箱を開けた時に鳴らす音
+
     // マップ座標(Key=Vector2Int)と、そこに配置された宝箱(Value=List<GameObject>)を紐付けます。
     private Dictionary<Vector2Int, List<GameObject>> chestObjectLists = new Dictionary<Vector2Int, List<GameObject>>();
 
@@ -26,6 +32,10 @@ public class MapGenerator : MonoBehaviour
     // --- 宝箱の管理 ---
     private int totalChestsInCurrentMap = 0; // 現在のマップに存在する宝箱の総数
     private int openedChestsInCurrentMap = 0; // 現在のマップで開けた宝箱の数
+    private bool allChestsOpenedSoundPlayed = false; // ★追加：全開けサウンドを再生済みか
+
+    // ★追加：サウンド再生用
+    private AudioSource audioSource;
 
     // 現在のマップデータを保持する静的配列 (16x16)
     // 0: 道, 1: 壁, 2: 階段, 3: 宝箱, 4: 敵, 5: 開く壁
@@ -55,7 +65,7 @@ public class MapGenerator : MonoBehaviour
     };
 
     public static int[,] level2 = new int[16, 16]
-    {   
+    {
         {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
         {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
         {1,1,0,0,0,1,1,3,1,1,1,1,1,0,1,1},
@@ -169,6 +179,15 @@ public class MapGenerator : MonoBehaviour
             return; // 重複インスタンスは以降の処理を行わない
         }
 
+        // ★追加：AudioSourceコンポーネントを取得
+        audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+        {
+            // (RequireComponentがあるので基本的にはここは通らない)
+            Debug.LogError("MapGeneratorにAudioSourceコンポーネントがありません！");
+        }
+
+
         // マップデータをリストに登録 (初回起動時のみ)
         if (mapLevels.Count == 0)
         {
@@ -243,6 +262,7 @@ public class MapGenerator : MonoBehaviour
         // 3. 管理リストをリセット
         chestObjectLists.Clear();
         openWallObjectLists.Clear();
+        allChestsOpenedSoundPlayed = false; // ★追加：サウンド再生フラグをリセット
 
         // 4. 新しいマップデータをセット
         map = (int[,])mapLevels[levelIndex].Clone();
@@ -291,6 +311,7 @@ public class MapGenerator : MonoBehaviour
         // 3. 宝箱や開く壁の管理リスト（辞書）をリセットします。
         chestObjectLists.Clear();
         openWallObjectLists.Clear();
+        allChestsOpenedSoundPlayed = false; // ★追加：サウンド再生フラグをリセット
 
         // 4. 新しいマップデータをセットします。
         map = (int[,])newMap.Clone();
@@ -322,6 +343,7 @@ public class MapGenerator : MonoBehaviour
         totalChestsInCurrentMap = 0;
         openedChestsInCurrentMap = 0;
         openWallObjectLists.Clear(); // (ChangeMapでも実行しているが、念のため)
+        // allChestsOpenedSoundPlayed は ChangeMap でリセット済み
 
         // --- マップデータに基づいてオブジェクトを配置 (Y=1の層) ---
         // (x, z) = (0, 0) から (15, 15) までループ
@@ -518,13 +540,32 @@ public class MapGenerator : MonoBehaviour
     }
 
     // マップ上のすべての宝箱が開けられたかチェックし、条件を満たしていれば「開く壁(openWall)」を削除します。
+    // ★★★ このメソッドを修正 ★★★
     private void CheckAllChestsOpened()
     {
         // 1. マップに宝箱が1つ以上存在し (totalChestsInCurrentMap > 0)
         // 2. 開けた宝箱の数(openedChestsInCurrentMap)が総数以上になった場合
         if (totalChestsInCurrentMap > 0 && openedChestsInCurrentMap >= totalChestsInCurrentMap)
         {
-            Debug.Log("すべての宝箱を開けました！ openWall を削除します。");
+            // ★追加：まだサウンドを再生していない場合のみ、再生処理を行う
+            if (!allChestsOpenedSoundPlayed)
+            {
+                Debug.Log("すべての宝箱を開けました！ openWall を削除し、サウンドを再生します。");
+                allChestsOpenedSoundPlayed = true; // ★フラグを立て、このマップでは再再生しないようにする
+
+                // ★サウンドを再生
+                if (audioSource != null && allChestsOpenedSound != null)
+                {
+                    audioSource.PlayOneShot(allChestsOpenedSound);
+                }
+                else
+                {
+                    if (audioSource == null) Debug.LogWarning("AudioSourceがnullです。");
+                    if (allChestsOpenedSound == null) Debug.LogWarning("allChestsOpenedSoundがインスペクタで設定されていません。");
+                }
+            }
+
+            // --- 壁の削除処理（ここはサウンド再生済みでも、リストに残っていれば実行する） ---
 
             // openWallObjectLists（開く壁の管理辞書）に登録されているすべての壁を処理
             foreach (var entry in openWallObjectLists)
